@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext.jsx'
 import ProductModal from '../components/ProductModal.jsx'
 import DeleteConfirmModal from '../components/DeleteConfirmModal.jsx'
@@ -26,6 +26,11 @@ export default function SellerDashboard() {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkSummary, setBulkSummary] = useState(null)
   const [bulkError, setBulkError] = useState('')
+
+  const [recording, setRecording] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const mediaRecorderRef = useRef(null)
+  const chunksRef = useRef([])
 
   useEffect(() => {
     loadShop()
@@ -94,6 +99,53 @@ export default function SellerDashboard() {
     }
   }
 
+  // --- Voice input for the "Quick Update with AI" box below ---
+  // Speak in any language (Hindi, Tamil, Telugu, English, mixed) - Groq's
+  // Whisper model transcribes it, then it lands in bulkText for review
+  // before the seller hits Apply. Nothing is saved just from speaking.
+  async function startRecording() {
+    setBulkError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      chunksRef.current = []
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        await sendForTranscription(audioBlob)
+      }
+      recorder.start()
+      mediaRecorderRef.current = recorder
+      setRecording(true)
+    } catch (err) {
+      setBulkError('Could not access the microphone. Check your browser permissions.')
+    }
+  }
+
+  function stopRecording() {
+    mediaRecorderRef.current?.stop()
+    setRecording(false)
+  }
+
+  async function sendForTranscription(audioBlob) {
+    setTranscribing(true)
+    try {
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'voice_entry.webm')
+      const res = await api.post('/seller/products/voice-transcribe', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      // Append rather than overwrite, in case they'd already typed something
+      setBulkText((prev) => (prev.trim() ? prev.trim() + '. ' + res.data.text : res.data.text))
+    } catch (err) {
+      const detail = err?.response?.data?.error
+      setBulkError(detail || 'Could not transcribe that recording. Try again.')
+    } finally {
+      setTranscribing(false)
+    }
+  }
+
   const hasLocation = shop && shop.latitude != null && shop.longitude != null
   const shopLocationLabel = shop
     ? [shop.areaLocality, shop.city].filter(Boolean).join(', ') || shop.address || 'Location not set'
@@ -157,15 +209,27 @@ export default function SellerDashboard() {
           <form onSubmit={handleBulkUpdate} style={{ display: 'flex', gap: 10 }}>
             <input
               style={{ flex: 1, padding: '10px 14px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 14 }}
-              placeholder="Tell me what changed…"
+              placeholder={transcribing ? 'Listening to your recording…' : 'Tell me what changed, or tap 🎤 to speak…'}
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
-              disabled={bulkBusy}
+              disabled={bulkBusy || transcribing}
             />
-            <button className="btn-primary" type="submit" disabled={bulkBusy || !bulkText.trim()}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={recording ? stopRecording : startRecording}
+              disabled={bulkBusy || transcribing}
+              title={recording ? 'Stop recording' : 'Speak in any language'}
+              style={recording ? { background: 'var(--danger)', color: '#fff' } : undefined}
+            >
+              {recording ? '⏹ Stop' : '🎤'}
+            </button>
+            <button className="btn-primary" type="submit" disabled={bulkBusy || transcribing || !bulkText.trim()}>
               {bulkBusy ? 'Thinking…' : 'Apply'}
             </button>
           </form>
+          {recording && <p className="muted" style={{ marginTop: 8 }}>🔴 Recording… tap Stop when you're done speaking.</p>}
+          {transcribing && <p className="muted" style={{ marginTop: 8 }}>Transcribing your recording…</p>}
           {bulkError && <p className="muted" style={{ color: 'var(--danger)', marginTop: 10 }}>{bulkError}</p>}
           {bulkSummary && (
             <ul style={{ marginTop: 12, paddingLeft: 20, fontSize: 14 }}>

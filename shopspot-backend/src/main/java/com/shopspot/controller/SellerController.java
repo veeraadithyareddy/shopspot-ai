@@ -12,6 +12,7 @@ import com.shopspot.service.GroqService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -217,6 +218,33 @@ public class SellerController {
         response.put("summary", summary);
         response.put("products", productRepository.findByShopId(shop.getId()));
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Accepts a short voice recording (e.g. a shopkeeper speaking in Hindi,
+     * Tamil, Telugu, or English) and returns the transcribed text. The
+     * frontend drops this text into the same "Quick Update with AI" box
+     * used by bulkUpdate() above, so the seller can review/edit what was
+     * heard before applying it - transcription and language parsing are
+     * both handled by Groq, but nothing is saved to the database here.
+     */
+    @PostMapping(value = "/products/voice-transcribe", consumes = "multipart/form-data")
+    public ResponseEntity<?> transcribeVoice(@AuthenticationPrincipal AuthenticatedUser user,
+                                              @RequestParam("audio") MultipartFile audio) {
+        if (!groqService.isConfigured()) {
+            return ResponseEntity.status(503).body(Map.of(
+                    "error", "Voice input isn't configured yet. Set groq.api.key in application.properties."));
+        }
+        if (audio == null || audio.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "No audio received - try recording again."));
+        }
+        try {
+            String contentType = audio.getContentType() != null ? audio.getContentType() : "audio/webm";
+            String text = groqService.transcribeAudio(audio.getBytes(), "voice_entry.webm", contentType);
+            return ResponseEntity.ok(Map.of("text", text));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Couldn't transcribe that: " + e.getMessage()));
+        }
     }
 
     /** Case-insensitive fuzzy match: exact match wins, otherwise first contains-match either direction. */

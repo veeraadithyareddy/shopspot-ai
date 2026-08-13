@@ -29,6 +29,11 @@ public class GroqService {
     private String model;
 
     private static final String GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+    private static final String GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
+    // Groq's hosted Whisper model - handles Hindi, Tamil, Telugu, and many
+    // other languages plus mixed/code-switched speech reasonably well.
+    private static final String WHISPER_MODEL = "whisper-large-v3-turbo";
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
@@ -87,5 +92,55 @@ public class GroqService {
                 .replaceAll("```$", "")
                 .trim();
         return mapper.readTree(cleaned);
+    }
+
+    /**
+     * Sends recorded audio to Groq's Whisper endpoint and returns the
+     * transcribed text. Whisper auto-detects the spoken language, so this
+     * works for a seller speaking Hindi, Tamil, Telugu, English, or a mix,
+     * without needing a language selector on the frontend.
+     *
+     * Java's HttpClient has no built-in multipart/form-data support, so the
+     * request body is built by hand below.
+     */
+    public String transcribeAudio(byte[] audioBytes, String filename, String contentType) throws Exception {
+        if (!isConfigured()) {
+            throw new IllegalStateException("Groq API key is not configured (set groq.api.key in application.properties).");
+        }
+
+        String boundary = "ShopSpotBoundary" + System.currentTimeMillis();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+
+        // "model" field
+        out.write(("--" + boundary + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write("Content-Disposition: form-data; name=\"model\"\r\n\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write((WHISPER_MODEL + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        // "file" field (the actual audio bytes)
+        out.write(("--" + boundary + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write(("Content-Type: " + contentType + "\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write(audioBytes);
+        out.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        out.write(("--" + boundary + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(GROQ_TRANSCRIPTION_URL))
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .timeout(Duration.ofSeconds(30))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(out.toByteArray()))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Groq transcription error (" + response.statusCode() + "): " + response.body());
+        }
+
+        JsonNode root = mapper.readTree(response.body());
+        return root.path("text").asText();
     }
 }
