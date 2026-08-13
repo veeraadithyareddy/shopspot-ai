@@ -1,0 +1,3 @@
+shopspot-backend/target/
+shopspot-frontend/node_modules/
+shopspot-backend/src/main/resources/application.properties
