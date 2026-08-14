@@ -247,6 +247,36 @@ public class SellerController {
         }
     }
 
+    /**
+     * Accepts a product photo and asks Groq's vision model to identify it,
+     * returning a suggested product name. Purely a suggestion - the frontend
+     * puts it in the editable "Product Name" field on the Add Product form
+     * rather than saving anything directly, since vision models can get
+     * regional/local products wrong.
+     */
+    @PostMapping(value = "/products/image-recognize", consumes = "multipart/form-data")
+    public ResponseEntity<?> recognizeProductImage(@AuthenticationPrincipal AuthenticatedUser user,
+                                                     @RequestParam("image") MultipartFile image) {
+        if (!groqService.isConfigured()) {
+            return ResponseEntity.status(503).body(Map.of(
+                    "error", "Photo recognition isn't configured yet. Set groq.api.key in application.properties."));
+        }
+        if (image == null || image.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "No photo received - try again."));
+        }
+        try {
+            String mimeType = image.getContentType() != null ? image.getContentType() : "image/jpeg";
+            String productName = groqService.recognizeProductName(image.getBytes(), mimeType);
+            if (productName == null) {
+                return ResponseEntity.ok(Map.of("recognized", false,
+                        "message", "Couldn't identify that product clearly - try a closer, well-lit photo, or type it in manually."));
+            }
+            return ResponseEntity.ok(Map.of("recognized", true, "productName", productName));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Couldn't process that photo: " + e.getMessage()));
+        }
+    }
+
     /** Case-insensitive fuzzy match: exact match wins, otherwise first contains-match either direction. */
     private Product findBestMatch(List<Product> products, String query) {
         String q = query.toLowerCase().trim();
