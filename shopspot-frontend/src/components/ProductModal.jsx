@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import Modal from './Modal.jsx'
+import CameraCapture from './CameraCapture.jsx'
 import api from '../api.js'
 
 export default function ProductModal({ mode, initialProduct, onCancel, onSave }) {
@@ -12,21 +13,19 @@ export default function ProductModal({ mode, initialProduct, onCancel, onSave })
 
   const [recognizing, setRecognizing] = useState(false)
   const [recognizeNote, setRecognizeNote] = useState('')
+  const [showCamera, setShowCamera] = useState(false)
   const fileInputRef = useRef(null)
 
-  async function handlePhotoSelected(e) {
-    const file = e.target.files?.[0]
-    e.target.value = '' // allow selecting the same file again later
-    if (!file) return
-
+  // Sends a photo (from the live camera capture or the file picker) to the
+  // backend for AI recognition, and drops the suggested name into the
+  // editable Product Name field.
+  async function recognizePhoto(file) {
     setRecognizing(true)
     setRecognizeNote('')
     try {
       const formData = new FormData()
       formData.append('image', file)
-      const res = await api.post('/seller/products/image-recognize', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
+      const res = await api.post('/seller/products/image-recognize', formData)
       if (res.data.recognized) {
         setName(res.data.productName)
         setRecognizeNote(`🪄 Recognized as "${res.data.productName}" - edit if that's not quite right.`)
@@ -39,6 +38,18 @@ export default function ProductModal({ mode, initialProduct, onCancel, onSave })
     } finally {
       setRecognizing(false)
     }
+  }
+
+  function handlePhotoSelected(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow selecting the same file again later
+    if (!file) return
+    recognizePhoto(file)
+  }
+
+  function handleCameraCapture(file) {
+    setShowCamera(false)
+    recognizePhoto(file)
   }
 
   async function handleSave() {
@@ -76,23 +87,43 @@ export default function ProductModal({ mode, initialProduct, onCancel, onSave })
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => setShowCamera(true)}
             disabled={recognizing}
-            title="Take or upload a photo to auto-fill the name"
+            title="Take a photo to auto-fill the name"
           >
             {recognizing ? '…' : '📷'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={recognizing}
+            title="Upload a photo from your device"
+          >
+            {recognizing ? '…' : '🖼️'}
           </button>
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
-            capture="environment"
             style={{ display: 'none' }}
             onChange={handlePhotoSelected}
           />
         </div>
+        <p className="muted" style={{ marginTop: 6, fontSize: 12 }}>📷 Take a photo &nbsp;·&nbsp; 🖼️ Upload from device</p>
         {recognizeNote && <p className="muted" style={{ marginTop: 6, fontSize: 13 }}>{recognizeNote}</p>}
       </div>
+
+      {showCamera && (
+        <CameraCapture
+          onCapture={handleCameraCapture}
+          onClose={() => setShowCamera(false)}
+          onFallbackToFile={() => {
+            setShowCamera(false)
+            fileInputRef.current?.click()
+          }}
+        />
+      )}
 
       <div className="modal-row">
         <div className="modal-field">
