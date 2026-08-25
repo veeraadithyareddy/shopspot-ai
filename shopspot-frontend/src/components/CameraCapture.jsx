@@ -19,35 +19,69 @@ export default function CameraCapture({ onCapture, onClose, onFallbackToFile }) 
   const [starting, setStarting] = useState(true)
 
   useEffect(() => {
-    startCamera(facingMode)
-    return stopCamera
+    let cancelled = false
+    startCamera(facingMode, () => cancelled)
+    return () => {
+      cancelled = true
+      stopCamera()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facingMode])
 
-  async function startCamera(mode) {
+  async function startCamera(mode, isCancelled) {
     setError('')
     setStarting(true)
-    stopCamera()
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: mode },
-        audio: false,
-      })
+      let stream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: mode } },
+          audio: false,
+        })
+      } catch (err) {
+        // Desktop webcams usually don't support facingMode (no back camera),
+        // so retry with no facing constraint at all before giving up.
+        if (err?.name === 'OverconstrainedError' || err?.name === 'NotFoundError') {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          })
+        } else {
+          throw err
+        }
+      }
+
+      // This effect run was cleaned up (e.g. React StrictMode's double-invoke
+      // in dev, or facingMode changed again) before the stream was ready —
+      // discard it instead of touching state/DOM tied to the old run.
+      if (isCancelled()) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        await videoRef.current.play()
+        try {
+          await videoRef.current.play()
+        } catch (playErr) {
+          // Benign: happens when a newer load request (StrictMode remount,
+          // camera switch, or unmount) superseded this one mid-flight.
+          if (playErr?.name !== 'AbortError') throw playErr
+        }
       }
     } catch (err) {
+      if (isCancelled() || err?.name === 'AbortError') return
+      console.error('Camera access failed:', err)
       setError(
         err?.name === 'NotAllowedError'
           ? 'Camera access was denied. Allow camera permission in your browser, or upload a photo instead.'
           : err?.name === 'NotFoundError'
           ? 'No camera was found on this device. Try uploading a photo instead.'
-          : 'Could not access the camera. Try uploading a photo instead.'
+          : `Could not access the camera (${err?.name || 'unknown error'}). Try uploading a photo instead.`
       )
     } finally {
-      setStarting(false)
+      if (!isCancelled()) setStarting(false)
     }
   }
 
